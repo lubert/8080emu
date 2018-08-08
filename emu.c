@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 
 typedef struct ConditionCodes {
@@ -53,7 +54,7 @@ int Emulate8080Op(State8080* state) {
     break;
   case 0x02:
     // STAX B
-    state->b = state->a
+    state->b = state->a;
     break;
   case 0x41:
     // MOV B,C
@@ -66,27 +67,19 @@ int Emulate8080Op(State8080* state) {
   case 0x43:
     // MOV B,E
     state->b = state->e;
+    break;
   case 0x80:
     // ADD B "Register Form"
     // A <- A + B
     // Use higher precision so that we can toggle the carry flag
     // 0xff as a mask to only look at last 8 bits
     uint16_t answer = (uint16_t) state->a + (uint16_t) state->b;
-    state->cc.z = answer & 0xff == 0; // Zero flag
-    state->cc.s = answer & 0x80 != 0; // Sign flag
+    state->cc.z = (answer & 0xff) == 0; // Zero flag
+    state->cc.s = (answer & 0x80) != 0; // Sign flag
     state->cc.cy = answer > 0xff;     // Carry
     state->cc.p = Parity(answer & 0xff);
     state->a = answer & 0xff;
-  case 0xC6:
-    // ADI D8 "Immediate Form"
-    // A <- A + byte
-    uint16_t answer = (uint16_t) state->a + (uint16_t) opcode[1];
-    state->cc.z = answer & 0xff == 0; // Zero flag
-    state->cc.s = answer & 0x80 != 0; // Sign flag
-    state->cc.cy = answer > 0xff;     // Carry
-    state->cc.p = Parity(answer & 0xff);
-    state->a = answer & 0xff;
-    state->pc += 1;
+    break;
   case 0x86:
     // ADD M "Memory Form"
     // A <- A + (HL)
@@ -98,12 +91,54 @@ int Emulate8080Op(State8080* state) {
     state->cc.cy = answer > 0xff;     // Carry
     state->cc.p = Parity(answer & 0xff);
     state->a = answer & 0xff;
+  case 0xc2:
+    // JNZ addr
+    if (0 == state->cc.z) // "Not-Z"
+      state->pc = opcode[2] << 8 | opcode[1];
+    else
+      state->pc += 2;
+    break;
+  case 0xc3:
+    // JMP addr
+    state->pc = opcode[2] << 8 | opcode[1];
+    break;
+  case 0xc6:
+    // ADI D8 "Immediate Form"
+    // A <- A + byte
+    uint16_t answer = (uint16_t) state->a + (uint16_t) opcode[1];
+    state->cc.z = (answer & 0xff) == 0; // Zero flag
+    state->cc.s = (answer & 0x80) != 0; // Sign flag
+    state->cc.cy = answer > 0xff;     // Carry
+    state->cc.p = Parity(answer & 0xff);
+    state->a = answer & 0xff;
+    state->pc += 1;
+    break;
+  case 0xc9:
+    // RET
+    // Get address from stack and update stack pointer
+    state->pc = (state->memory[state->sp + 1] << 8) | state->memory[state->sp];
+    state->sp += 2;
+    break;
+  case 0xcd:
+    // CALL addr
+    uint16_t ret = state->pc + 2; // Address of the next instruction
+    // Put address on the stack
+    // 8080 is little-endian, so it stores it "backwards"
+    state->memory[state->sp - 1] = (ret >> 8) & 0xff; // First byte
+    state->memory[state->sp - 2] = ret & 0xff; // Last byte
+    state->sp = state->sp - 2; // Move stack pointer
+    state->pc = (opcode[2] << 8) | opcode[1];
+    break;
   default:   UnimplementedInstruction(state); break;
-    // Notes:
+    // Arithmetic group notes:
     // ADC, ACI, SBB, SUI use the carry bit per the data book
     // INX and DCX do not affect the flags
     // DAD only affects the carry flag
     // INR and DCR do not affect the carry flag
+
+    // Branch group notes:
+    // PCHL unconditionally jumps to address in HL register
+    // RST is part of this group
   }
-  state->pc += 1 // for the opcode
+  state->pc += 1; // for the opcode
 }
