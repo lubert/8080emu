@@ -59,9 +59,21 @@ int Emulate8080Op(State8080* state) {
     state->b = state->a;
     break;
   case 0x0f:
+    // RRC "Rotate A right"
+    // A = A >> 1; bit 7 = prev bit 0; CY = prev bit 0
     {
       uint8_t x = state->a;
-      state->a = ((x & 1) << 7) | (x >> 1);
+      // bit shift right 1, bit 0 shift left 7
+      state->a = (x >> 1) | ((x & 1) << 7);
+      state->cc.cy = (1 == (x & 1));
+    }
+    break;
+  case 0x1f:
+    // RAR "Rotate A right through carry"
+    // A = A >> 1; bit 7 = CY; CY = prev bit 0
+    {
+      uint8_t x = state->a;
+      state->a = (x >> 1) | (state->cc.cy << 7);
       state->cc.cy = (1 == (x & 1));
     }
     break;
@@ -91,7 +103,7 @@ int Emulate8080Op(State8080* state) {
       uint16_t answer = (uint16_t) state->a + (uint16_t) state->b;
       state->cc.z = (answer & 0xff) == 0; // Zero flag
       state->cc.s = (answer & 0x80) != 0; // Sign flag
-      state->cc.cy = answer > 0xff;     // Carry
+      state->cc.cy = answer > 0xff;       // Carry
       state->cc.p = Parity(answer & 0xff);
       state->a = answer & 0xff;
     }
@@ -165,6 +177,22 @@ int Emulate8080Op(State8080* state) {
       state->cc.cy = 0;
       state->a = x;
       state->pc += 1;
+    }
+    break;
+  case 0xfe:
+    // CPI D8 "Compare immediate with A"
+    // A - data
+    {
+      // Sets the flags but doesn't store the result
+      uint8_t x = state->a - opcode[1];
+      state->cc.z = (x == 0); // Two numbers are equal
+      state->cc.s = (0x80 == (x & 0x80));
+      // Databook is unclear on how to handle parity
+      state->cc.p = Parity(x, 8);
+      // If A is greater, CY cleared since no borrow
+      // If A is less, CY set since A had to borrow
+      state->cc.cy = (state->a < opcode[1]);
+      state->pc++;
     }
     break;
   default:   UnimplementedInstruction(state); break;
