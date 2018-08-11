@@ -48,13 +48,27 @@ int Emulate8080Op(State8080* state) {
     break;
   case 0x01:
     // LXI B, D16
+    // B <- byte 3, C <- byte 2
     state->b = opcode[1];
     state->c = opcode[2];
     state->pc += 2;
     break;
   case 0x02:
     // STAX B
+    // (BC) < A
     state->b = state->a;
+    break;
+  case 0x0f:
+    {
+      uint8_t x = state->a;
+      state->a = ((x & 1) << 7) | (x >> 1);
+      state->cc.cy = (1 == (x & 1));
+    }
+    break;
+  case 0x2f:
+    // CMA
+    // A <- !A
+    state->a = -state->a; // why is this "-" in the x? shouldn't it be "!"
     break;
   case 0x41:
     // MOV B,C
@@ -71,26 +85,31 @@ int Emulate8080Op(State8080* state) {
   case 0x80:
     // ADD B "Register Form"
     // A <- A + B
-    // Use higher precision so that we can toggle the carry flag
-    // 0xff as a mask to only look at last 8 bits
-    uint16_t answer = (uint16_t) state->a + (uint16_t) state->b;
-    state->cc.z = (answer & 0xff) == 0; // Zero flag
-    state->cc.s = (answer & 0x80) != 0; // Sign flag
-    state->cc.cy = answer > 0xff;     // Carry
-    state->cc.p = Parity(answer & 0xff);
-    state->a = answer & 0xff;
+    {
+      // Use higher precision so that we can toggle the carry flag
+      // 0xff as a mask to only look at last 8 bits
+      uint16_t answer = (uint16_t) state->a + (uint16_t) state->b;
+      state->cc.z = (answer & 0xff) == 0; // Zero flag
+      state->cc.s = (answer & 0x80) != 0; // Sign flag
+      state->cc.cy = answer > 0xff;     // Carry
+      state->cc.p = Parity(answer & 0xff);
+      state->a = answer & 0xff;
+    }
     break;
   case 0x86:
     // ADD M "Memory Form"
     // A <- A + (HL)
-    // Get H, then shift it one byte left, and then combine it with L
-    uint16_t offset = (state->h<<8) | (state->l);
-    uint16_t answer = (uint16_t) state->a + state->memory[offset];
-    state->cc.z = answer & 0xff == 0; // Zero flag
-    state->cc.s = answer & 0x80 != 0; // Sign flag
-    state->cc.cy = answer > 0xff;     // Carry
-    state->cc.p = Parity(answer & 0xff);
-    state->a = answer & 0xff;
+    {
+      // Get H, then shift it one byte left, and then combine it with L
+      uint16_t offset = (state->h<<8) | (state->l);
+      uint16_t answer = (uint16_t) state->a + state->memory[offset];
+      state->cc.z = (answer & 0xff) == 0; // Zero flag
+      state->cc.s = (answer & 0x80) != 0; // Sign flag
+      state->cc.cy = answer > 0xff;     // Carry
+      state->cc.p = Parity(answer & 0xff);
+      state->a = answer & 0xff;
+    }
+    break;
   case 0xc2:
     // JNZ addr
     if (0 == state->cc.z) // "Not-Z"
@@ -105,13 +124,15 @@ int Emulate8080Op(State8080* state) {
   case 0xc6:
     // ADI D8 "Immediate Form"
     // A <- A + byte
-    uint16_t answer = (uint16_t) state->a + (uint16_t) opcode[1];
-    state->cc.z = (answer & 0xff) == 0; // Zero flag
-    state->cc.s = (answer & 0x80) != 0; // Sign flag
-    state->cc.cy = answer > 0xff;     // Carry
-    state->cc.p = Parity(answer & 0xff);
-    state->a = answer & 0xff;
-    state->pc += 1;
+    {
+      uint16_t answer = (uint16_t) state->a + (uint16_t) opcode[1];
+      state->cc.z = (answer & 0xff) == 0; // Zero flag
+      state->cc.s = (answer & 0x80) != 0; // Sign flag
+      state->cc.cy = answer > 0xff;       // Carry
+      state->cc.p = Parity(answer & 0xff);
+      state->a = answer & 0xff;
+      state->pc += 1;
+    }
     break;
   case 0xc9:
     // RET
@@ -121,13 +142,30 @@ int Emulate8080Op(State8080* state) {
     break;
   case 0xcd:
     // CALL addr
-    uint16_t ret = state->pc + 2; // Address of the next instruction
-    // Put address on the stack
-    // 8080 is little-endian, so it stores it "backwards"
-    state->memory[state->sp - 1] = (ret >> 8) & 0xff; // First byte
-    state->memory[state->sp - 2] = ret & 0xff; // Last byte
-    state->sp = state->sp - 2; // Move stack pointer
-    state->pc = (opcode[2] << 8) | opcode[1];
+    {
+      uint16_t ret = state->pc + 2; // Address of the next instruction
+      // Put address on the stack
+      // 8080 is little-endian, so it stores it "backwards"
+      state->memory[state->sp - 1] = (ret >> 8) & 0xff; // First byte
+      state->memory[state->sp - 2] = ret & 0xff; // Last byte
+      state->sp = state->sp - 2; // Move stack pointer
+      state->pc = (opcode[2] << 8) | opcode[1];
+    }
+    break;
+  case 0xe6:
+    // ANI D8
+    // A <- A & data
+    {
+      uint8_t x = state->a & opcode[1];
+      state->cc.z = x == 0;
+      // This is related to two's complement
+      // If a byte is signed and the highest bit is 1, it's negative
+      state->cc.s = (0x80 == (x & 0x80));
+      state->cc.p = Parity(x, 8);
+      state->cc.cy = 0;
+      state->a = x;
+      state->pc += 1;
+    }
     break;
   default:   UnimplementedInstruction(state); break;
     // Arithmetic group notes:
