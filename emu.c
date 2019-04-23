@@ -2,6 +2,8 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+#include "disassembler.c"
+
 typedef struct ConditionCodes {
   // zero, set when result == 0
   uint8_t   z:1;
@@ -33,6 +35,10 @@ typedef struct State8080 {
   uint8_t   int_enable;
 } State8080;
 
+int Parity(int x) {
+  return !__builtin_parity(x);
+}
+
 void UnimplementedInstruction(State8080* state) {
   // pc will have advanced one, so undo that
   printf("Error: Unimplemented instruction\n");
@@ -41,7 +47,7 @@ void UnimplementedInstruction(State8080* state) {
 
 int Emulate8080Op(State8080* state) {
   unsigned char *opcode = &state->memory[state->pc];
-
+  Disassemble8080Op(state->memory, state->pc);
   switch(*opcode) {
   case 0x00:
     // NOP
@@ -191,7 +197,7 @@ int Emulate8080Op(State8080* state) {
       // This is related to two's complement
       // If a byte is signed and the highest bit is 1, it's negative
       state->cc.s = (0x80 == (x & 0x80));
-      state->cc.p = Parity(x, 8);
+      state->cc.p = Parity(x);
       state->cc.cy = 0;
       state->a = x;
       state->pc += 1;
@@ -236,7 +242,7 @@ int Emulate8080Op(State8080* state) {
       state->cc.z = (x == 0); // Two numbers are equal
       state->cc.s = (0x80 == (x & 0x80));
       // Databook is unclear on how to handle parity
-      state->cc.p = Parity(x, 8);
+      state->cc.p = Parity(x);
       // If A is greater, CY cleared since no borrow
       // If A is less, CY set since A had to borrow
       state->cc.cy = (state->a < opcode[1]);
@@ -255,4 +261,11 @@ int Emulate8080Op(State8080* state) {
     // RST is part of this group
   }
   state->pc += 1; // for the opcode
+  // Print out processor state
+  printf("\tC=%d,P=%d,S=%d,Z=%d\n", state->cc.cy, state->cc.p,
+         state->cc.s, state->cc.z);
+  printf("\tA $%02x B $%02x C $%02x D $%02x E $%02x H $%02x L $%02x SP %04x\n",
+         state->a, state->b, state->c, state->d,
+         state->e, state->h, state->l, state->sp);
+  return 0;
 }
