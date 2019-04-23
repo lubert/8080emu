@@ -37,12 +37,6 @@ int Parity(int x) {
   return !__builtin_parity(x);
 }
 
-void UnimplementedInstruction(State8080* state) {
-  // pc will have advanced one, so undo that
-  printf("Error: Unimplemented instruction\n");
-  exit(1);
-}
-
 /**
  * unsigned char *codebuffer - this is just a pointer to a string
  * int pc - index into the string
@@ -319,9 +313,19 @@ int Disassemble8080Op(unsigned char *codebuffer, int pc) {
   return opbytes;
 }
 
+void UnimplementedInstruction(State8080* state) {
+  // pc will have advanced one, so undo that
+  printf("Error: Unimplemented instruction\n");
+  state->pc--;
+  Disassemble8080Op(state->memory, state->pc);
+  printf("\n");
+  exit(1);
+}
+
 int Emulate8080Op(State8080* state) {
   unsigned char *opcode = &state->memory[state->pc];
   Disassemble8080Op(state->memory, state->pc);
+  state->pc += 1;
   switch(*opcode) {
   case 0x00:
     // NOP
@@ -338,6 +342,46 @@ int Emulate8080Op(State8080* state) {
     // (BC) < A
     state->b = state->a;
     break;
+  case 0x05:
+    // DCR B
+    // B <- B - 1
+    state->b--;
+    state->cc.z = state->b == 0;
+    state->cc.s = 0x80 == (state->b & 0x80);
+    state->cc.p = Parity(state->b);
+    break;
+  case 0x06:
+    // MVI B, D8
+    // B <- byte 2
+    state->b = opcode[1];
+    state->pc++;
+    break;
+  case 0x09:
+    // DAD B
+    // HL = HL + BC
+    {
+      uint32_t bc = (state->b << 8) | state->c;
+      uint32_t hl = (state->h << 8) | state->l;
+      uint32_t res = hl + bc;
+      state->h = (res & 0xff00) >> 8;
+      state->l = (res & 0xff);
+      state->cc.cy = 0x8000 == (0x8000 & res);
+    }
+    break;
+  case 0x0d:
+    // DCR C
+    // C <- C - 1
+    state->c--;
+    state->cc.z = state->c == 0;
+    state->cc.s = 0x80 == (state->c & 0x80);
+    state->cc.p = Parity(state->c);
+    break;
+  case 0x0e:
+    // MVI C, D8
+    // C <- byte 2
+    state->c = opcode[1];
+    state->pc++;
+    break;
   case 0x0f:
     // RRC "Rotate A right"
     // A = A >> 1; bit 7 = prev bit 0; CY = prev bit 0
@@ -346,6 +390,40 @@ int Emulate8080Op(State8080* state) {
       // bit shift right 1, bit 0 shift left 7
       state->a = (x >> 1) | ((x & 1) << 7);
       state->cc.cy = (1 == (x & 1));
+    }
+    break;
+  case 0x11:
+    // LXI D, D16
+    // D <- byte 3, E <- byte 2
+    state->e = opcode[1];
+    state->d = opcode[2];
+    state->pc += 2;
+    break;
+  case 0x13:
+    // INX D
+    // DE <- DE + 1
+    state->e++;
+    if (state->e == 0)
+      state->d++;
+    break;
+  case 0x19:
+    // DAD D
+    // HL = HL + DE
+    {
+      uint32_t de = (state->d << 8) | state->e;
+      uint32_t hl = (state->h << 8) | state->l;
+      uint32_t res = hl + de;
+      state->h = (res & 0xff00) >> 8;
+      state->l = (res & 0xff);
+      state->cc.cy = 0x8000 == (0x8000 & res);
+    }
+    break;
+  case 0x1a:
+    // LDAX D
+    // A <- (DE)
+    {
+      uint16_t offset = (state->d << 8) | state-> e;
+      state->a = state->memory[offset];
     }
     break;
   case 0x1f:
@@ -357,10 +435,80 @@ int Emulate8080Op(State8080* state) {
       state->cc.cy = (1 == (x & 1));
     }
     break;
+  case 0x21:
+    // LXI H, D16
+    // H <- byte 3, L <- byte 2
+    state->l = opcode[1];
+    state->h = opcode[2];
+    state->pc += 2;
+    break;
+  case 0x23:
+    // INX H
+    // HL <- HL + 1
+    state->l++;
+    if (state->l == 0)
+      state->h++;
+    break;
+  case 0x26:
+    // MVI H, D8
+    // H <- byte 2
+    state->h = opcode[1];
+    state->pc++;
+    break;
+  case 0x29:
+    // DAD H
+    // HL = HL + HL
+    {
+      uint32_t hl = (state->h << 8) | state->l;
+      uint32_t res = hl + hl;
+      state->h = (res & 0xff00) >> 8;
+      state->l = (res & 0xff);
+      state->cc.cy = 0x8000 == (0x8000 & res);
+    }
+    break;
   case 0x2f:
     // CMA
     // A <- !A
     state->a = ~state->a;
+    break;
+  case 0x31:
+    // LXI SP, D16
+    // SP.hi <- byte 3, SP.lo <- byte 2
+    state->sp = (opcode[2] << 8) | opcode[1];
+    state->pc += 2;
+    break;
+  case 0x32:
+    // STA adr
+    // (adr) <- A
+    {
+      uint16_t offset = (opcode[2] << 8) | opcode[1];
+      state->memory[offset] = state->a;
+      state->pc += 2;
+    }
+    break;
+  case 0x36:
+    // MVI M, D8
+    // (HL) <- byte 2
+    {
+      uint16_t offset = (state->h << 8) | state->l;
+      state->memory[offset] = opcode[1];
+      state->pc++;
+    }
+    break;
+  case 0x3a:
+    // LDA adr
+    // A <- (adr)
+    {
+      uint16_t offset = (opcode[2] << 8) | opcode[1];
+      state->a = state->memory[offset];
+      state->pc += 2;
+    }
+    break;
+  case 0x3e:
+    // MVI A, D8
+    // A <- byte 2
+    state->a = opcode[1];
+    state->pc++;
     break;
   case 0x41:
     // MOV B,C
@@ -373,6 +521,68 @@ int Emulate8080Op(State8080* state) {
   case 0x43:
     // MOV B,E
     state->b = state->e;
+    break;
+  case 0x56:
+    // MOV D,M
+    // D <- (HL)
+    {
+      uint16_t offset = (state->h << 8) | state->l;
+      state->d = state->memory[offset];
+    }
+    break;
+  case 0x5e:
+    // MOV E,M
+    // E <- (HL)
+    {
+      uint16_t offset = (state->h << 8) | state->l;
+      state->e = state->memory[offset];
+    }
+    break;
+  case 0x66:
+    // MOV H,M
+    // H <- (HL)
+    {
+      uint16_t offset = (state->h << 8) | state->l;
+      state->h = state->memory[offset];
+    }
+    break;
+  case 0x6f:
+    // MOV L,A
+    state->l = state->a;
+    break;
+  case 0x77:
+    // MOV M,A
+    {
+      uint16_t offset = (state->h << 8) | state->l;
+      state->memory[offset] = state->a;
+    }
+    break;
+  case 0x79:
+    // MOV A,B
+    state->a = state->b;
+    break;
+  case 0x7a:
+    // MOV A,D
+    // A <- D
+    state->a = state->d;
+    break;
+  case 0x7b:
+    // MOV A,E
+    // A <- E
+    state->a = state->e;
+    break;
+  case 0x7c:
+    // MOV A,H
+    // A <- H
+    state->a = state->h;
+    break;
+  case 0x7e:
+    // MOV A,M
+    // A <- (HL)
+    {
+      uint16_t offset = (state->h << 8) | state->l;
+      state->a = state->memory[offset];
+    }
     break;
   case 0x80:
     // ADD B "Register Form"
@@ -402,6 +612,24 @@ int Emulate8080Op(State8080* state) {
       state->a = answer & 0xff;
     }
     break;
+  case 0xa7:
+    // ANA A
+    // A <- A & A
+    state->a = state->a & state->a;
+    state->cc.z = state->a == 0;
+    state->cc.s = 0x80 == (0x80 & state->a);
+    state->cc.p = Parity(state->a);
+    state->cc.cy = 0;
+    break;
+  case 0xaf:
+    // XRA A
+    // A <- A ^ A
+    state->a = state->a ^ state->a;
+    state->cc.z = state->a == 0;
+    state->cc.s = 0x80 == (0x80 & state->a);
+    state->cc.p = Parity(state->a);
+    state->cc.cy = 0;
+    break;
   case 0xc1:
     // POP B
     // C <- (sp); B <- (sp + 1); sp <- sp + 2
@@ -420,7 +648,7 @@ int Emulate8080Op(State8080* state) {
     break;
   case 0xc3:
     // JMP addr
-    state->pc = opcode[2] << 8 | opcode[1];
+    state->pc = (opcode[2] << 8) | opcode[1];
     break;
   case 0xc5:
     // PUSH B
@@ -462,6 +690,47 @@ int Emulate8080Op(State8080* state) {
       state->pc = (opcode[2] << 8) | opcode[1];
     }
     break;
+  case 0xd1:
+    // POP D
+    // E <- (sp); D <- (sp + 1); sp <- sp + 2
+    {
+      state->e = state->memory[state->sp];
+      state->d = state->memory[state->sp + 1];
+      state->sp += 2;
+    }
+    break;
+  case 0xd3:
+    // OUT D8
+    // Skip for now?
+    state->pc++;
+    break;
+  case 0xd5:
+    // PUSH D
+    // (sp - 2) <- E; (sp - 1) <- D; sp <- sp - 2
+    {
+      state->memory[state->sp - 2] = state->e;
+      state->memory[state->sp - 1] = state->d;
+      state->sp -= 2;
+    }
+    break;
+  case 0xe1:
+    // POP H
+    // L <- (sp); H <- (sp + 1); sp <- sp + 2
+    {
+      state->l = state->memory[state->sp];
+      state->h = state->memory[state->sp + 1];
+      state->sp += 2;
+    }
+    break;
+  case 0xe5:
+    // PUSH H
+    // (sp - 2) <- L; (sp - 1) <- H; sp <- sp - 2
+    {
+      state->memory[state->sp - 2] = state->l;
+      state->memory[state->sp - 1] = state->h;
+      state->sp -= 2;
+    }
+    break;
   case 0xe6:
     // ANI D8
     // A <- A & data
@@ -475,6 +744,18 @@ int Emulate8080Op(State8080* state) {
       state->cc.cy = 0;
       state->a = x;
       state->pc += 1;
+    }
+    break;
+  case 0xeb:
+    // XCHG
+    // H <-> D; L <-> E;
+    {
+      uint8_t tmp = state->d;
+      state->d = state->h;
+      state->h = tmp;
+      tmp = state->e;
+      state->e = state->l;
+      state->l = tmp;
     }
     break;
   case 0xf1:
@@ -507,6 +788,10 @@ int Emulate8080Op(State8080* state) {
       state->sp -= 2;
     }
     break;
+  case 0xfb:
+    // EI
+    state->int_enable = 1;
+    break;
   case 0xfe:
     // CPI D8 "Compare immediate with A"
     // A - data
@@ -534,29 +819,22 @@ int Emulate8080Op(State8080* state) {
     // PCHL unconditionally jumps to address in HL register
     // RST is part of this group
   }
-  state->pc += 1; // for the opcode
   // Print out processor state
+  /*
   printf("\tC=%d,P=%d,S=%d,Z=%d\n", state->cc.cy, state->cc.p,
          state->cc.s, state->cc.z);
   printf("\tA $%02x B $%02x C $%02x D $%02x E $%02x H $%02x L $%02x SP %04x\n",
          state->a, state->b, state->c, state->d,
-         state->e, state->h, state->l, state->sp);
+p         state->e, state->h, state->l, state->sp);
+  */
   return 0;
 }
 
-/**
- * int argc - the # of args passed into the program, always at least 1, since
- * the first arg is the call to the program itself
- *
- * char **argv - pointer to a char *, since C-style strings are just char *
- * arrays, this could be also written as char *argv[] (array of char *)
- *
- */
-int main(int argc, char **argv) {
+void ReadFileIntoMemoryAt(State8080* state, char* filename, uint32_t offset) {
   // "rb" means "read binary"
-  FILE *f= fopen(argv[1], "rb");
+  FILE *f= fopen(filename, "rb");
   if (f == NULL) {
-    printf("error: Couldn't open %s\n", argv[1]);
+    printf("error: Couldn't open %s\n", filename);
     exit(1);
   }
 
@@ -567,9 +845,7 @@ int main(int argc, char **argv) {
   int fsize = ftell(f); // returns the current file position
   fseek(f, 0L, SEEK_SET); // Sets stream back to the beginning
 
-  // Allocate enough for the entire file
-  unsigned char *buffer=malloc(fsize);
-
+  uint8_t *buffer = &state->memory[offset];
   // fread is for binary i/o
   // fread(
   //   void *ptr,
@@ -581,12 +857,33 @@ int main(int argc, char **argv) {
   // fread(buffer, MAX_FILE_SIZE, 1, f)
   fread(buffer, fsize, 1, f);
   fclose(f);
+}
 
-  int pc = 0;
+State8080* Init8080(void) {
+  State8080* state = calloc(1, sizeof(State8080));
+  state->memory = malloc(0x10000); // 16k
+  return state;
+}
 
-  while (pc < fsize) {
-    // Returns how many instructions to increment by
-    pc += Disassemble8080Op(buffer, pc);
+/**
+ * int argc - the # of args passed into the program, always at least 1, since
+ * the first arg is the call to the program itself
+ *
+ * char **argv - pointer to a char *, since C-style strings are just char *
+ * arrays, this could be also written as char *argv[] (array of char *)
+ *
+ */
+int main(int argc, char **argv) {
+  State8080* state = Init8080();
+
+  int done = 0;
+
+  ReadFileIntoMemoryAt(state, "invaders.h", 0);
+  ReadFileIntoMemoryAt(state, "invaders.g", 0x800);
+  ReadFileIntoMemoryAt(state, "invaders.f", 0x1000);
+  ReadFileIntoMemoryAt(state, "invaders.e", 0x1800);
+  while (done == 0) {
+    done = Emulate8080Op(state);
   }
 
   return 0;
