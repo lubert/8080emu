@@ -80,7 +80,7 @@ int Emulate8080Op(State8080* state) {
   case 0x2f:
     // CMA
     // A <- !A
-    state->a = -state->a; // why is this "-" in the x? shouldn't it be "!"
+    state->a = ~state->a;
     break;
   case 0x41:
     // MOV B,C
